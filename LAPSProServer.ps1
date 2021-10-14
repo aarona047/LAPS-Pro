@@ -1,3 +1,33 @@
+#requires -version 2
+<#
+.SYNOPSIS
+  The LAPSPro Server manages client requests for local admin passwords.
+.DESCRIPTION
+  <Brief description of script>
+
+.PARAMETER <Parameter_Name>
+    <Brief description of parameter input required. Repeat this attribute if required>
+
+.INPUTS
+ PC Names 
+ Reason
+
+
+
+.OUTPUTS
+  Admin passwords for specified machines
+
+.NOTES
+  Version:        0.2
+  Author:         Aaron Andrew
+  Creation Date:  14/10/2021
+  Purpose/Change: Initial script development
+  
+.EXAMPLE
+  <Example goes here. Repeat this attribute for more than one example>
+#>
+
+
 function Invoke-Sqlcmd2 {
     <#
         .SYNOPSIS
@@ -644,159 +674,159 @@ function Invoke-Sqlcmd2 {
 
 
 
-    function Test-SQLConnection {
-        $SQLServer = "svha-sqle-01\SQLEXPRESS"
-        $Database = 'LocalAdminPassword'
-#        $FileLogLevel = ((Get-XMLConfigLoggingLevel).ToString()).ToLower()
+function Test-SQLConnection {
+    $SQLServer = "svha-sqle-01\SQLEXPRESS"
+    $Database = 'LocalAdminPassword'
+    $ConnectionString = "Server={0};Database={1};Integrated Security=True;" -f $SQLServer,$Database
 
-        $ConnectionString = "Server={0};Database={1};Integrated Security=True;" -f $SQLServer,$Database
+    try
+    {
+        $sqlConnection = New-Object System.Data.SqlClient.SqlConnection $ConnectionString;
+        $sqlConnection.Open();
+        $sqlConnection.Close();
 
-        try
-        {
-            $sqlConnection = New-Object System.Data.SqlClient.SqlConnection $ConnectionString;
-            $sqlConnection.Open();
-            $sqlConnection.Close();
-
-            $obj = $true;
-            Write-Host "SQL connection test successfull"
-        }
-        catch {
-            $text = "Error connecting to SQLDatabase $Database on SQL Server $SQLServer"
-            Write-Host $text
-            #if (-NOT($FileLogLevel -like "clientinstall")) { Out-LogFile -Xml $xml -Text $text -Severity 3}
-            $obj = $false;
-            Write-Host "SQL connection test failed"
-        }
-        finally {Write-Host $obj }
+        $obj = $true;
+        Write-Host "SQL connection test successfull"
     }
+    catch {
+        $text = "Error connecting to SQLDatabase $Database on SQL Server $SQLServer"
+        Write-Host $text
+        #if (-NOT($FileLogLevel -like "clientinstall")) { Out-LogFile -Xml $xml -Text $text -Severity 3}
+        $obj = $false;
+        Write-Host "SQL connection test failed"
+    }
+    finally {Write-Host $obj }
+}
 
-
+#Test connection to SQL Server
 Test-SQLConnection
 
-
+#Set loop var
 $looping = $true
+
+#Set SQL server vars
 $SQLServer = "svha-sqle-01\SQLEXPRESS"
 $Database = 'LocalAdminPassword'
 $Table = "dbo.AdminPWd"
 $admintoolgroup = "ag_inspire_admintool"
 
-#do{
-#Check for "New" entries in DB and get the ReqTicket ID
+do{
+    #Check for "New" entries in DB and get the ReqTicket ID $tickets will return null if ticket not NEW
 
-$query= "begin tran
-begin
-SELECT ReqTicket 
-FROM dbo.AdminPWD
-WHERE ReqStatus='New';
-end
-commit tran"
-try { $Tickets = Invoke-SqlCmd2 -ServerInstance $SQLServer -Database $Database -Query $query }
-catch {
-    $ErrorMessage = $_.Exception.Message
-    $text = "Error updating SQL with the following query: $query. Error: $ErrorMessage"
-    Write-Error $text
-}
-Write-Host "End Invoke-SQL check for new tickets"
-
-#Only run if there is a ticket
-if ($tickets -ne $null) {
-    ForEach ($Ticket in $Tickets) {
-        #For each new ticket get the User that was attched to the ReqTicket ID
-        Write-Host $Ticket.ItemArray
-        $CurrentTicket = $Ticket.ItemArray
-        $userquery = "begin tran
-        begin
-        SELECT Username
-        FROM dbo.AdminPWD
-        WHERE ReqTicket='$CurrentTicket';
-        end
-        commit tran"
-
-        try {$Users = Invoke-SqlCmd2 -ServerInstance $SQLServer -Database $Database -Query $userquery }
-        catch {
+    $query= "begin tran
+    begin
+    SELECT ReqTicket 
+    FROM dbo.AdminPWD
+    WHERE ReqStatus='New';
+    end
+    commit tran"
+    try {$Tickets = Invoke-SqlCmd2 -ServerInstance $SQLServer -Database $Database -Query $query}
+    catch {
         $ErrorMessage = $_.Exception.Message
-        $text = "Error updating SQL with the following query: $ticketquery. Error: $ErrorMessage"
+        $text = "Error updating SQL with the following query: $query. Error: $ErrorMessage"
         Write-Error $text
-        }
-        Write-Host "End Invoke-SQL get username for checks"
+    }
+    Write-Host "End Invoke-SQL check for new tickets"
 
-        ForEach ($User in $Users) {
+    #Only run rest of script if there is a NEW ticket
+    if ($tickets -ne $null) {
+        ForEach ($Ticket in $Tickets) {
+            #For each new ticket get the User that was attched to the ReqTicket ID
+            Write-Host $Ticket.ItemArray
+            $CurrentTicket = $Ticket.ItemArray
+            $userquery = "begin tran
+            begin
+            SELECT Username
+            FROM dbo.AdminPWD
+            WHERE ReqTicket='$CurrentTicket';
+            end
+            commit tran"
 
-            $TargetUser = $User.ItemArray
-            Write-Host "User who ran the script" $TargetUser
-            $usermember = Get-ADGroupMember -Identity $admintoolgroup | Where-Object {$_.SamAccountName -eq $TargetUser}
-           
-            if($usermember) {
-                Write-Host 'User has tool access' -Fore Green
-
-        
-                #For each new ticket get the PC name that was attched to the ReqTicket ID
-                #Write-Host $Ticket.ItemArray
-                #$CurrentTicket = $Ticket.ItemArray
-                $ticketquery = "begin tran
-                begin
-                SELECT TargetPC 
-                FROM dbo.AdminPWD
-                WHERE ReqTicket='$CurrentTicket';
-                end
-                commit tran"
-
-
-                try {$TargetPCs = Invoke-SqlCmd2 -ServerInstance $SQLServer -Database $Database -Query $ticketquery }
-                catch {
-                    $ErrorMessage = $_.Exception.Message
-                    $text = "Error updating SQL with the following query: $ticketquery. Error: $ErrorMessage"
-                    Write-Error $text
-                }
-                Write-Host "End Update-SQL get Ticket"
-
-                #Get the admin password for each of the PCs retrieved above then add password to Pass column attached to ReqTicket ID then set Req Status to InProg
-                ForEach ($Target in $TargetPCs) {
-                    Write-Host "Current target is" $Target.ItemArray
-                    $CurrentTarget = "$($Target.ItemArray)"
-                    $Password = Get-ADComputer $CurrentTarget -Properties ms-Mcs-AdmPwd | Select -ExpandProperty ms-Mcs-AdmPwd
-                    Write-Host "Current Password is" $Password
-                    $passwordquery = "begin tran
-                    begin
-                    UPDATE dbo.AdminPWD
-                    SET ReqStatus = 'InProg', Pass = '$password'
-                    WHERE ReqTicket = '$CurrentTicket';
-                    end
-                    commit tran"
-
-                    try {$TargetPCs = Invoke-SqlCmd2 -ServerInstance $SQLServer -Database $Database -Query $passwordquery }
-                    catch {
-                        $ErrorMessage = $_.Exception.Message
-                        $text = "Error updating SQL with the following query: $ticketquery. Error: $ErrorMessage"
-                        Write-Error $text
-                    }
-                    Write-Host "End Invoke-SQL for Password and status"
-            
-                }
-
-            }
-            else {
-            Write-Host 'User does not have access to tool, access denied!' -Fore red
-            $passwordquery = "begin tran
-                                begin
-                                UPDATE dbo.AdminPWD
-                                SET ReqStatus = 'DENIED'
-                                WHERE ReqTicket = '$CurrentTicket';
-                                end
-                                commit tran"
-
-            try {$TargetPCs = Invoke-SqlCmd2 -ServerInstance $SQLServer -Database $Database -Query $passwordquery }
+            try {$Users = Invoke-SqlCmd2 -ServerInstance $SQLServer -Database $Database -Query $userquery }
             catch {
             $ErrorMessage = $_.Exception.Message
             $text = "Error updating SQL with the following query: $ticketquery. Error: $ErrorMessage"
             Write-Error $text
             }
-            Write-Host "End Invoke-SQL for Password and status"
+            Write-Host "End Invoke-SQL get username for checks"
+
+            ForEach ($User in $Users) {
+
+                $TargetUser = $User.ItemArray
+                Write-Host "User who ran the script" $TargetUser
+                $usermember = Get-ADGroupMember -Identity $admintoolgroup | Where-Object {$_.SamAccountName -eq $TargetUser}
+            
+                if($usermember) {
+                    Write-Host 'User has tool access' -Fore Green
+
+            
+                    #For each new ticket get the PC name that was attched to the ReqTicket ID
+                    #Write-Host $Ticket.ItemArray
+                    #$CurrentTicket = $Ticket.ItemArray
+                    $ticketquery = "begin tran
+                    begin
+                    SELECT TargetPC 
+                    FROM dbo.AdminPWD
+                    WHERE ReqTicket='$CurrentTicket';
+                    end
+                    commit tran"
+
+
+                    try {$TargetPCs = Invoke-SqlCmd2 -ServerInstance $SQLServer -Database $Database -Query $ticketquery }
+                    catch {
+                        $ErrorMessage = $_.Exception.Message
+                        $text = "Error updating SQL with the following query: $ticketquery. Error: $ErrorMessage"
+                        Write-Error $text
+                    }
+                    Write-Host "End Update-SQL get Ticket"
+
+                    #Get the admin password for each of the PCs retrieved above then add password to Pass column attached to ReqTicket ID then set Req Status to InProg
+                    ForEach ($Target in $TargetPCs) {
+                        Write-Host "Current target is" $Target.ItemArray
+                        $CurrentTarget = "$($Target.ItemArray)"
+                        $Password = Get-ADComputer $CurrentTarget -Properties ms-Mcs-AdmPwd | Select -ExpandProperty ms-Mcs-AdmPwd
+                        Write-Host "Current Password is" $Password
+                        $passwordquery = "begin tran
+                        begin
+                        UPDATE dbo.AdminPWD
+                        SET ReqStatus = 'InProg', Pass = '$password'
+                        WHERE ReqTicket = '$CurrentTicket';
+                        end
+                        commit tran"
+
+                        try {$TargetPCs = Invoke-SqlCmd2 -ServerInstance $SQLServer -Database $Database -Query $passwordquery }
+                        catch {
+                            $ErrorMessage = $_.Exception.Message
+                            $text = "Error updating SQL with the following query: $ticketquery. Error: $ErrorMessage"
+                            Write-Error $text
+                        }
+                        Write-Host "End Invoke-SQL for Password and status"
+                
+                    }
+
+                }
+                else {
+                Write-Host 'User does not have access to tool, access denied!' -Fore red
+                $passwordquery = "begin tran
+                                    begin
+                                    UPDATE dbo.AdminPWD
+                                    SET ReqStatus = 'DENIED'
+                                    WHERE ReqTicket = '$CurrentTicket';
+                                    end
+                                    commit tran"
+
+                try {$TargetPCs = Invoke-SqlCmd2 -ServerInstance $SQLServer -Database $Database -Query $passwordquery }
+                catch {
+                $ErrorMessage = $_.Exception.Message
+                $text = "Error updating SQL with the following query: $ticketquery. Error: $ErrorMessage"
+                Write-Error $text
+                }
+                Write-Host "End Invoke-SQL for Password and status"
+                }
+
             }
-
         }
+        
     }
-    
-}
 
-#}while ($looping -eq $true)
+}while ($looping -eq $true)

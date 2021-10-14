@@ -1,3 +1,34 @@
+#requires -version 2
+<#
+.SYNOPSIS
+  The LAPSPro Client allows a person to submit a "ticket" to the LAPSPro server requesting an local administrator password for a PC
+
+.DESCRIPTION
+  <Brief description of script>
+
+.PARAMETER <Parameter_Name>
+    <Brief description of parameter input required. Repeat this attribute if required>
+
+.INPUTS
+ PC Names 
+ Reason
+
+
+
+.OUTPUTS
+  Admin passwords for specified machines
+
+.NOTES
+  Version:        0.2
+  Author:         Aaron Andrew
+  Creation Date:  14/10/2021
+  Purpose/Change: Initial script development
+  
+.EXAMPLE
+  <Example goes here. Repeat this attribute for more than one example>
+#>
+
+
 function Invoke-Sqlcmd2 {
     <#
         .SYNOPSIS
@@ -683,32 +714,33 @@ function Get-RandomAlphanumericString
     }
 }
 
+#Make sure connection to SQL Server is working.
 Test-SQLConnection
 
 
 
-
+#Read, request or create details required to log ticket to SQL server
 $Username = $env:Username
 $TargetPC = Read-Host "Enter Hostname of PC"
-$Reason = Read-Host "Please enter rason for admin password request"
+$Reason = Read-Host "Please enter reason for admin password request"
 $ReqStatus = "New"
 $ReqTicket = Get-RandomAlphanumericString
 
 
-
+#Server details
 $SQLServer = "svha-sqle-01\SQLEXPRESS"
 $Database = 'LocalAdminPassword'
 $Table = "dbo.AdminPWd"
 
 
-#Send request to SQL server
+#Send ticket to SQL server
 $query= "begin tran
 begin
 INSERT INTO dbo.AdminPWD (Username, TargetPC, Reason, ReqStatus, ReqTicket)
 VALUES ('$Username', '$TargetPC', '$Reason', '$ReqStatus', '$ReqTicket');
 end
 commit tran"
-try { Invoke-SqlCmd2 -ServerInstance $SQLServer -Database $Database -Query $query }
+try {Invoke-SqlCmd2 -ServerInstance $SQLServer -Database $Database -Query $query}
 catch {
     $ErrorMessage = $_.Exception.Message
     $text = "Error updating SQL with the following query: $query. Error: $ErrorMessage"
@@ -716,34 +748,36 @@ catch {
 }
 Write-Host "End Invoke-SQL log ticket"
 
+#Do loop to wait for server to process request
 do{
-
     $resultquery = "begin tran
-                begin
-                SELECT ReqStatus 
-                FROM dbo.AdminPWD
-                WHERE ReqTicket='$ReqTicket';
-                end
-                commit tran"
-                Invoke-SqlCmd2 -ServerInstance $SQLServer -Database $Database -Query $resultquery
+    begin
+    SELECT ReqStatus 
+    FROM dbo.AdminPWD
+    WHERE ReqTicket='$ReqTicket';
+    end
+    commit tran"
 
-                try {$result = Invoke-SqlCmd2 -ServerInstance $SQLServer -Database $Database -Query $resultquery }
-                catch {
-                    $ErrorMessage = $_.Exception.Message
-                    $text = "Error updating SQL with the following query: $ticketquery. Error: $ErrorMessage"
-                    Write-Error $text
-                }
-                Write-Host "End Update-SQL get Ticket"
-
-                $status = $result.ItemArray
+    try {$result = Invoke-SqlCmd2 -ServerInstance $SQLServer -Database $Database -Query $resultquery}
+    catch {
+        $ErrorMessage = $_.Exception.Message
+        $text = "Error updating SQL with the following query: $ticketquery. Error: $ErrorMessage"
+        Write-Error $text
+    }
+    Write-Host "End Update-SQL get Ticket"
+    $status = $result.ItemArray
 
 }While ($Status -eq "New")
+Write-Host "End Update-SQL get Ticket"
 
+#Perform action based on status response
+#Deny access
 if ($status -eq "DENIED") {
     Write-Host "PERMISSION DENIED PLEASE SPEAK TO YOUR ENDPOINT ADMINISTRATOR" -Fore red
 }
+#Access allowed write get password from DB
 elseif ($status -eq "InProg") {
-        $passquery = "begin tran
+    $passquery = "begin tran
     begin
     SELECT Pass 
     FROM dbo.AdminPWD
@@ -752,7 +786,7 @@ elseif ($status -eq "InProg") {
     commit tran"
 
 
-    try {$password = Invoke-SqlCmd2 -ServerInstance $SQLServer -Database $Database -Query $passquery }
+    try {$password = Invoke-SqlCmd2 -ServerInstance $SQLServer -Database $Database -Query $passquery}
     catch {
         $ErrorMessage = $_.Exception.Message
         $text = "Error updating SQL with the following query: $ticketquery. Error: $ErrorMessage"
@@ -760,5 +794,24 @@ elseif ($status -eq "InProg") {
     }
     Write-Host "End Invoke-SQL get password"
 
+
+    #Cleanup request remove password from DB and set status complete
+    $cleanupquery = "begin tran
+    begin
+    UPDATE dbo.AdminPWD
+    SET Pass = NULL, ReqStatus = 'Complete'
+    WHERE ReqTicket='$ReqTicket';
+    end
+    commit tran"
+
+    try {Invoke-SqlCmd2 -ServerInstance $SQLServer -Database $Database -Query $cleanupquery}
+    catch {
+        $ErrorMessage = $_.Exception.Message
+        $text = "Error updating SQL with the following query: $ticketquery. Error: $ErrorMessage"
+        Write-Error $text
+    }
+    Write-Host "End Invoke-SQL DB cleanup"
+
+    #Write password to host here so noone is tempted to end the script early
     Write-Host "The local admin password for $TargetPC is $($password.ItemArray)"
 }
